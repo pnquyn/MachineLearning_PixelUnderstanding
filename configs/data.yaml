@@ -3,7 +3,7 @@ test_csv: "data/test.csv"
 
 fixed_height: 32     
 font_size: 24       
-font_path: "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
+font_path: null      # null = tự động tìm font theo OS
 
 batch_size: 16   
-num_workers: 4      
+num_workers: 0      
