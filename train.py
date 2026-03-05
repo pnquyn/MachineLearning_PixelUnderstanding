@@ -28,9 +28,15 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
         optimizer.step()
 
         total_loss += loss.item()
+        # Tính Accuracy
+        preds = (outputs > 0.5).float()
+        correct += (preds == target).sum().item()
+        total += target.num_elements() # hoặc target.size(0) tùy thuộc vào shape
+
+
         pbar.set_postfix(loss=loss.item())
 
-    return total_loss / len(loader)
+    return total_loss / len(loader), correct / total if total > 0 else 0.0
 
 
 @torch.no_grad()
@@ -46,9 +52,15 @@ def validate(model, loader, criterion, device):
         loss = criterion(outputs, target)
         
         total_loss += loss.item()
+
+        # Tính Accuracy
+        preds = (outputs > 0.5).float()
+        correct += (preds == target).sum().item()
+        total += target.num_elements()
+
         pbar.set_postfix(val_loss=loss.item())
 
-    return total_loss / len(loader)
+    return total_loss / len(loader), correct / total if total > 0 else 0.0
 
 
 def main():
@@ -112,14 +124,14 @@ def main():
         print(f"\n--- Experiment: {train_cfg['experiment_name']} ---") # Dùng tên thí nghiệm
         print(f"Epoch {epoch+1}/{epochs}")
         
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss = validate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        val_loss, val_acc = validate(model, val_loader, criterion, device)
         
         scheduler.step()
 
         curr_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}: Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | LR: {curr_lr:.6f}")
-
+        print(f"                 Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
         # Save Checkpoints
         checkpoint_data = {
             'epoch': epoch,
@@ -127,6 +139,7 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'best_loss': best_loss,
+            'val_acc': val_acc,
         }
         torch.save(checkpoint_data, last_checkpoint)
 

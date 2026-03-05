@@ -64,7 +64,7 @@ class PixelUnderstandingDataset(Dataset):
         context_img = self._text_to_image(row['context'])
         context_tensor = F.to_tensor(context_img)
         
-        if self.split == "train" and 'target' in row:
+        if 'target' in row:
             target_img = self._text_to_image(row['target'])
             target_tensor = F.to_tensor(target_img)
             return context_tensor, target_tensor, torch.tensor(sample_id, dtype=torch.long)
