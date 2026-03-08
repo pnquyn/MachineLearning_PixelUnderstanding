@@ -8,60 +8,127 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from tqdm import tqdm
 
 from util.data_loader import create_dataloaders 
-from models.baseline import BaselineModel 
+from models.multihead import UNetMultiHeadModel
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, logits, targets):
+        probs = torch.sigmoid(logits)
+        
+        probs = probs.view(-1)
+        targets = targets.view(-1)
+        
+        intersection = (probs * targets).sum()                            
+        dice = (2. * intersection + self.smooth) / (probs.sum() + targets.sum() + self.smooth)  
+        
+        return 1 - dice
+
+def train_one_epoch(model, loader, optimizer, criterions, device, loss_weights):
     model.train()
-    total_loss = 0
+    total_loss = 0.0
+    total_pixel_acc = 0.0  # Thay thế cho cls_acc
+    total_samples = 0
 
     pbar = tqdm(loader, desc="Training")
-    for context, target,_ in pbar:
-        context, target = context.to(device), target.to(device)
+    
+    for context, target_img, target_label, _ in pbar:
+        context = context.to(device)
+        target_img = target_img.to(device)
+        target_label = target_label.to(device).long() 
 
         optimizer.zero_grad()
-        outputs = model(context)
-    
-        loss = criterion(outputs, target)
+        
+        # Forward pass
+        pred_pixel, pred_cls = model(context)
+        
+        # 1. Tính Loss
+        loss_pixel = criterions['pixel'](pred_pixel, target_img)
+        loss_cls = criterions['cls'](pred_cls, target_label)
+        loss = loss_weights['pixel'] * loss_pixel + loss_weights['cls'] * loss_cls
         
         # Backward pass
         loss.backward()
         optimizer.step()
 
+        # 2. TÍNH ĐỘ CHÍNH XÁC CHO TARGET ẢNH (Pixel Accuracy)
+        # Sử dụng ngưỡng 0.5 để chuyển output (sigmoid) về nhị phân 0/1
+        with torch.no_grad():
+            pred_binary = (torch.sigmoid(pred_pixel) > 0.5).float()
+            target_binary = (target_img > 0.5).float()
+            
+            # Tính Pixel-wise Accuracy: Tỉ lệ số pixel trùng khớp trên tổng số pixel
+            correct_pixels = (pred_binary == target_binary).sum().item()
+            total_pixels = target_binary.numel()
+            pixel_acc = correct_pixels / total_pixels
+            
+            # Hoặc tính Dice Score (Độ chính xác của riêng phần chữ trắng)
+            intersection = (pred_binary * target_binary).sum().item()
+            dice_score = (2. * intersection + 1e-6) / (pred_binary.sum().item() + target_binary.sum().item() + 1e-6)
+
         total_loss += loss.item()
-        # Tính Accuracy
-        preds = (outputs > 0.5).float()
-        correct += (preds == target).sum().item()
-        total += target.num_elements() # hoặc target.size(0) tùy thuộc vào shape
+        total_pixel_acc += dice_score  # Ở đây tôi dùng Dice Score vì nó phản ánh đúng độ "khớp" của chữ
+        total_samples += 1
 
+        pbar.set_postfix(
+            loss=f"{loss.item():.4f}", 
+            pixel_dice=f"{dice_score:.4f}"
+        )
 
-        pbar.set_postfix(loss=loss.item())
-
-    return total_loss / len(loader), correct / total if total > 0 else 0.0
-
+    # Trả về Loss trung bình và Dice Score trung bình của tập ảnh
+    return total_loss / len(loader), total_pixel_acc / total_samples
 
 @torch.no_grad()
-def validate(model, loader, criterion, device):
+def validate(model, loader, criterions, device, loss_weights):
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
+    total_dice = 0.0
+    total_samples = 0
 
     pbar = tqdm(loader, desc="Validating")
-    for context, target,_ in pbar:
-        context, target = context.to(device), target.to(device)
+    
+    for context, target_img, target_label, _ in pbar:
+        context = context.to(device)
+        target_img = target_img.to(device)
+        target_label = target_label.to(device).long()
         
-        outputs = model(context)
-        loss = criterion(outputs, target)
+        # Forward pass
+        pred_pixel, pred_cls = model(context)
         
+        # 1. Tính Loss (để theo dõi sự hội tụ trên tập Val)
+        loss_pixel = criterions['pixel'](pred_pixel, target_img)
+        loss_cls = criterions['cls'](pred_cls, target_label)
+        loss = loss_weights['pixel'] * loss_pixel + loss_weights['cls'] * loss_cls
         total_loss += loss.item()
 
-        # Tính Accuracy
-        preds = (outputs > 0.5).float()
-        correct += (preds == target).sum().item()
-        total += target.num_elements()
+        # 2. TÍNH ĐỘ CHÍNH XÁC ẢNH (Dice Score cho Head 1)
+        # Chuyển output về xác suất (0-1) và ngưỡng hóa (thresholding)
+        pred_probs = torch.sigmoid(pred_pixel)
+        pred_binary = (pred_probs > 0.5).float()
+        target_binary = (target_img > 0.5).float()
+        
+        # Công thức Dice Score: (2 * intersection) / (sum_pred + sum_target)
+        intersection = (pred_binary * target_binary).sum().item()
+        denominator = pred_binary.sum().item() + target_binary.sum().item()
+        
+        # Tránh chia cho 0 nếu cả pred và target đều đen hoàn toàn
+        dice = (2. * intersection + 1e-6) / (denominator + 1e-6)
+        
+        total_dice += dice
+        total_samples += 1
 
-        pbar.set_postfix(val_loss=loss.item())
+        pbar.set_postfix(
+            val_loss=f"{loss.item():.4f}", 
+            val_pixel_dice=f"{dice:.4f}"
+        )
 
-    return total_loss / len(loader), correct / total if total > 0 else 0.0
-
+    # Trả về Loss trung bình và Dice trung bình của toàn bộ tập Validation
+    avg_loss = total_loss / len(loader)
+    avg_dice = total_dice / total_samples
+    
+    return avg_loss, avg_dice
 
 def main():
     with open("configs/data.yaml", "r") as f:
@@ -73,13 +140,25 @@ def main():
 
     train_loader, val_loader = create_dataloaders(
         train_csv=data_cfg["train_csv"],  
+        val_csv=data_cfg["val_csv"],
         batch_size=data_cfg["batch_size"],
-        fixed_height=data_cfg.get("fixed_height", 32), # Tham số từ config [cite: 13, 23]
+        fixed_height=data_cfg.get("fixed_height", 32),
         font_size=data_cfg.get("font_size", 24),
         font_path=data_cfg.get("font_path", None)
     )
 
-    model = BaselineModel().to(device) 
+    model = UNetMultiHeadModel().to(device) 
+
+    # loss functions
+    criterions = {
+        'pixel': DiceLoss(),          
+        'cls': nn.CrossEntropyLoss()   
+    }
+    
+    loss_weights = {
+        'pixel': float(train_cfg.get("weight_pixel", 1.0)),
+        'cls': float(train_cfg.get("weight_cls", 0.5))
+    }
 
     # Checkpoints setup
     save_dir = train_cfg["save_dir"]
@@ -87,13 +166,14 @@ def main():
     last_checkpoint = os.path.join(save_dir, "last.pt")
     best_checkpoint = os.path.join(save_dir, "best.pt")
 
-    # optimizer
+    # Optimizer
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=float(train_cfg["lr"]), 
         weight_decay=float(train_cfg.get("weight_decay", 1e-4)) 
     )
 
+    # Schedulers
     epochs = train_cfg["epochs"]
     warmup_epochs = train_cfg.get("warmup_epochs", 5)
     min_lr = float(train_cfg.get("min_lr", 1e-6)) 
@@ -104,7 +184,7 @@ def main():
 
     # Resume logic
     start_epoch = 0
-    best_loss = float('inf')
+    best_dice = 0.0
 
     if os.path.exists(last_checkpoint):
         print(f"--- Đang khôi phục quá trình huấn luyện từ: {last_checkpoint} ---")
@@ -116,41 +196,45 @@ def main():
         best_loss = checkpoint.get('best_loss', float('inf'))
         print(f"--- Tiếp tục từ epoch {start_epoch} ---")
 
-    # Loss function
-    criterion = nn.BCELoss()
-
     # Train loop
     for epoch in range(start_epoch, epochs):
-        print(f"\n--- Experiment: {train_cfg['experiment_name']} ---") # Dùng tên thí nghiệm
+        experiment_name = train_cfg.get('experiment_name', 'Kaggle_Pixel_Understanding')
+        print(f"\n--- Experiment: {experiment_name} ---") 
         print(f"Epoch {epoch+1}/{epochs}")
         
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterions, device, loss_weights
+        )
+        val_loss, val_acc = validate(
+            model, val_loader, criterions, device, loss_weights
+        )
         
         scheduler.step()
 
         curr_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}: Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | LR: {curr_lr:.6f}")
-        print(f"                 Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
+        print(f"Epoch {epoch+1}: Train Pixel Dice: {train_acc:.4f} | Val Pixel Dice: {val_acc:.4f}")
+        
         # Save Checkpoints
         checkpoint_data = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
-            'best_loss': best_loss,
+            'best_dice': best_dice,
             'val_acc': val_acc,
         }
         torch.save(checkpoint_data, last_checkpoint)
 
-        if val_loss < best_loss:
-            best_loss = val_loss
-            print(f"--- Đã tìm thấy Best Model mới với loss {best_loss:.6f} ---")
+        # Lưu best model nếu tổng loss trên tập validation giảm
+        if val_acc > best_dice:
+            best_dice = val_acc
+            print(f"--- Đã tìm thấy Best Model mới với dice {best_dice:.6f} ---")
             torch.save(model.state_dict(), best_checkpoint)
 
     final_path = os.path.join(save_dir, "final.pt")
     torch.save(model.state_dict(), final_path)
-    print(f"--- Hoàn tất {train_cfg['experiment_name']}! ---")
+    print(f"--- Hoàn tất {experiment_name}! ---")
 
 if __name__ == "__main__":
     main()

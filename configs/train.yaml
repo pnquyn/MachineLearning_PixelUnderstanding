@@ -1,6 +1,6 @@
 project_name: "PixelUnderstanding"
-experiment_name: "baseline_cnn_v1"
-save_dir: "checkpoints/baseline"
+experiment_name: "baseline_cnn_v2"
+save_dir: "checkpoints/multihead"
 
 epochs: 50         
 lr: 0.001            

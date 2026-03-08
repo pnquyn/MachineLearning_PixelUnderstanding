@@ -1,9 +1,10 @@
-train_csv: "data/train.csv"
-test_csv: "data/test.csv"
+train_csv: "data/train_split.csv"
+val_csv: "data/val_split.csv"
+test_csv: "data/val_split.csv"
 
 fixed_height: 32     
 font_size: 24       
 font_path: null      # null = tự động tìm font theo OS
 
-batch_size: 16   
+batch_size: 8  
 num_workers: 0      

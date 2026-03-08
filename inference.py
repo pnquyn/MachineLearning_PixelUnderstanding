@@ -3,8 +3,9 @@ import yaml
 import numpy as np
 import torch
 from tqdm import tqdm
+import cv2
 
-from models.baseline import BaselineModel
+from models.multihead import UNetMultiHeadModel
 from util.data_loader import create_test_dataloader
 
 
@@ -13,7 +14,7 @@ def load_model(checkpoint_path, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint không tìm thấy: {checkpoint_path}")
 
-    model = BaselineModel().to(device)
+    model = UNetMultiHeadModel().to(device)
 
     print(f"Loading model from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -26,34 +27,41 @@ def load_model(checkpoint_path, device):
 
 
 @torch.no_grad()
-def run_inference(model, test_loader, device, threshold=0.5):
-    """
-    Chạy inference trên test set.
-    Trả về list các (sample_id, row_id, col_id) cho các pixel dự đoán "sáng" (text).
-    """
+def run_inference(model, test_loader, device, threshold=0.5, visual_dir=None):
     model.eval()
-    all_pixels = []  # List of (sample_id, row_id, col_id)
+    all_pixels = []
+
+    if visual_dir:
+        os.makedirs(visual_dir, exist_ok=True)
 
     pbar = tqdm(test_loader, desc="Inference")
     for batch in pbar:
+        # Tương ứng với collate_fn mode Test trả về (contexts, ids)
         contexts, ids = batch
         contexts = contexts.to(device)
 
-        # Forward pass: model dự đoán ảnh target từ ảnh context
-        outputs = model(contexts)  # (B, 1, H, W), giá trị [0, 1] sau Sigmoid
+        # FIX 1: Nhận 2 đầu ra vì model là MultiHead
+        # Nếu model cũ chỉ trả về 1 thì để: outputs = model(contexts)
+        pred_pixel, pred_cls = model(contexts) 
 
-        # Threshold: pixel > 0.5 → text (sáng), <= 0.5 → background (tối)
-        predictions = (outputs > threshold).squeeze(1).cpu().numpy()  # (B, H, W)
+        # FIX 2: Thêm Sigmoid để đưa về [0, 1] trước khi threshold
+        outputs = torch.sigmoid(pred_pixel) 
+
+        # Threshold
+        predictions = (outputs > threshold).squeeze(1).cpu().numpy()
         sample_ids = ids.cpu().numpy()
 
-        # Trích xuất tọa độ pixel "sáng" cho mỗi sample
         for i in range(len(sample_ids)):
             sid = int(sample_ids[i])
-            pred = predictions[i]  # (H, W)
+            pred = predictions[i]
 
-            # Tìm tọa độ (row, col) của các pixel sáng
+            if visual_dir:
+                # Lưu ảnh để kiểm tra mắt (rất quan trọng)
+                vis_img = (pred * 255).astype(np.uint8)
+                cv2.imwrite(os.path.join(visual_dir, f"sample_{sid}.png"), vis_img)
+
+            # Tìm tọa độ pixel sáng
             rows, cols = np.where(pred > 0)
-
             for r, c in zip(rows, cols):
                 all_pixels.append((sid, int(r), int(c)))
 
@@ -132,7 +140,7 @@ def main():
     # Create test dataloader
     print("\nLoading test data...")
     test_loader = create_test_dataloader(
-        test_csv=data_cfg.get("test_csv", "data/test.csv"),
+        test_csv=data_cfg.get("test_csv", "data/train.csv"),
         batch_size=data_cfg.get("batch_size", 16),
         fixed_height=data_cfg.get("fixed_height", 32),
         font_size=data_cfg.get("font_size", 24),
@@ -141,7 +149,7 @@ def main():
 
     # Run inference
     print("\nRunning inference...")
-    pixels = run_inference(model, test_loader, device, threshold=0.5)
+    pixels = run_inference(model, test_loader, device, threshold=0.5, visual_dir="inference_visuals")
 
     # Save submission
     output_dir = "submission_output"
