@@ -41,23 +41,22 @@ class PixelUnderstandingDataset(Dataset):
         else:
             self.font_path = font_path
 
-        # if self.split == "train":
-        #     self.aug = T.Compose([
-        #         # 1. Làm mờ nhẹ (Blur)
-        #         T.RandomApply([T.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
+        if self.split == "train":
+            self.aug = T.Compose([
+                # 1. Làm mờ nhẹ (Blur)
+                T.RandomApply([T.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0))], p=0.3),
                 
-        #         # 2. Thay đổi độ sáng, tương phản (Jitter)
-        #         T.ColorJitter(brightness=0.3, contrast=0.3),
+                # 2. Thay đổi độ sáng, tương phản (Jitter)
+                T.ColorJitter(brightness=0.3, contrast=0.3),
                 
-        #         # 3. Xoay nhẹ (Rotation) - Chỉ xoay tối đa 2 độ để tránh mất nét
-        #         T.RandomRotation(degrees=2, fill=0),
+                # 3. Xoay nhẹ (Rotation) - Chỉ xoay tối đa 2 độ để tránh mất nét
+                T.RandomRotation(degrees=2, fill=0),
                 
-        #         # 4. Dịch chuyển nhẹ (Affine)
-        #         T.RandomAffine(degrees=0, translate=(0.02, 0.02), fill=0)
-        #     ])
-        # else:
-        #     self.aug = None
-        self.aug = None  # Tạm thời tắt augmentation để kiểm tra dữ liệu gốc
+                # 4. Dịch chuyển nhẹ (Affine)
+                T.RandomAffine(degrees=0, translate=(0.02, 0.02), fill=0)
+            ])
+        else:
+            self.aug = None
         print(f"Loaded {len(self.df)} samples for {split} split. Font: {self.font_path}")
 
     def _text_to_image_fixed(self, text, max_w):

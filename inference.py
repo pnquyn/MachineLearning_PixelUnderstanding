@@ -134,7 +134,8 @@ def main():
     print(f"Using device: {device}")
 
     # Load best model
-    checkpoint_path = os.path.join(train_cfg["save_dir"], "best.pt")
+    # checkpoint_path = os.path.join(train_cfg["save_dir"], "best.pt")
+    checkpoint_path = "best.pt"
     model = load_model(checkpoint_path, device)
 
     # Create test dataloader

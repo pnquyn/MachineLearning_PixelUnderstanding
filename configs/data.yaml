@@ -6,5 +6,5 @@ fixed_height: 32
 font_size: 24       
 font_path: null      # null = tự động tìm font theo OS
 
-batch_size: 8  
+batch_size: 4
 num_workers: 0      
