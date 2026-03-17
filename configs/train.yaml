@@ -1,11 +1,11 @@
 project_name: "PixelUnderstanding"
-experiment_name: "baseline_cnn_v2"
+experiment_name: "multihead_v2"
 save_dir: "checkpoints/multihead"
 
-epochs: 50         
-lr: 0.001            
-min_lr: 0.00001      
-weight_decay: 0.0001
+epochs: 60          
+lr: 0.0002        
+min_lr: 0.00001     
+weight_decay: 0.01  
 warmup_epochs: 5    
 
-model_name: "baseline_encoder_decoder"
+model_name: "multiheadv2"  
