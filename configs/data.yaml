@@ -1,6 +1,6 @@
 train_csv: "data/train_split.csv"
 val_csv: "data/val_split.csv"
-test_csv: "data/val_split.csv"
+test_csv: "data/test.csv"
 
 fixed_height: 32     
 font_size: 24       
