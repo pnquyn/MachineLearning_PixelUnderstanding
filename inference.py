@@ -4,8 +4,9 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import cv2
+import pandas as pd
 
-from models.multihead import UNetMultiHeadModel
+from models.multiheadv2 import UNetMultiHeadV2
 from util.data_loader import create_test_dataloader
 
 
@@ -14,7 +15,7 @@ def load_model(checkpoint_path, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint không tìm thấy: {checkpoint_path}")
 
-    model = UNetMultiHeadModel().to(device)
+    model = UNetMultiHeadV2().to(device)
 
     print(f"Loading model from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -98,19 +99,12 @@ def save_submission(pixels, output_dir="submission_output"):
     print(f"Saved pixels.npz: {len(pixel_array)} pixel coordinates")
 
     # 2. Tạo submission.csv (copy format từ sample_submission)
-    import pandas as pd
-    sample_sub_path = "sample_submission/submission.csv"
-    if os.path.exists(sample_sub_path):
-        sub_df = pd.read_csv(sample_sub_path)
-        sub_df.to_csv(os.path.join(output_dir, "submission.csv"), index=False)
-    else:
-        # Tạo mới nếu không có sample
-        unique_ids = sorted(set(p[0] for p in pixels)) if pixels else []
-        sub_df = pd.DataFrame({
-            'id': range(len(unique_ids)),
-            'sample_id': unique_ids
-        })
-        sub_df.to_csv(os.path.join(output_dir, "submission.csv"), index=False)
+    unique_ids = sorted(set(p[0] for p in pixels)) if pixels else []
+    sub_df = pd.DataFrame({
+        'id': unique_ids,
+        'sample_id': unique_ids
+    })
+    sub_df.to_csv(os.path.join(output_dir, "submission.csv"), index=False)
 
     print(f"Saved submission.csv to {output_dir}/")
 
@@ -153,7 +147,7 @@ def main():
     pixels = run_inference(model, test_loader, device, threshold=0.5, visual_dir="inference_visuals")
 
     # Save submission
-    output_dir = "submission_output"
+    output_dir = "submission_output1"
     save_submission(pixels, output_dir)
 
     print(f"\n=== Inference hoàn tất! ===")
