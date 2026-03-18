@@ -97,8 +97,7 @@ class PixelUnderstandingDataset(Dataset):
         sample_id = row['id']
         
         # 1. CHUYỂN ĐỔI: char_count (từ CSV) -> pixel_width
-        char_max = row['max_width']
-        pixel_max_w = self._calculate_pixel_width(char_max)
+        pixel_max_w = row['max_width']
         
         # 2. XỬ LÝ CONTEXT (Input)
         # Sử dụng pixel_max_w vừa tính được thay vì char_max

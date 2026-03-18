@@ -6,7 +6,7 @@ from tqdm import tqdm
 import cv2
 import pandas as pd
 
-from models.multihead import UNetMultiHeadModel
+from models.multiheadv2 import UNetMultiHeadV2
 from util.data_loader import create_test_dataloader
 
 
@@ -15,7 +15,7 @@ def load_model(checkpoint_path, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint không tìm thấy: {checkpoint_path}")
 
-    model = UNetMultiHeadModel().to(device)
+    model = UNetMultiHeadV2().to(device)
 
     print(f"Loading model from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
