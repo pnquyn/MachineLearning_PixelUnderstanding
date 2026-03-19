@@ -9,7 +9,8 @@ from tqdm import tqdm
 
 from util.data_loader import create_dataloaders 
 # Import 2 mạng riêng biệt từ model.py mới của bạn
-from models.multiheadv3 import UNetGenerator, PatchGANDiscriminator 
+# from models.multiheadv3 import UNetGenerator, PatchGANDiscriminator 
+from models.pix2pixv2 import UNetGenerator, PatchGANDiscriminator
 from util.loss import DiceLoss
 
 # ==========================================
