@@ -49,11 +49,11 @@ class PixelUnderstandingDataset(Dataset):
                 # 2. Thay đổi độ sáng, tương phản (Jitter)
                 T.ColorJitter(brightness=0.3, contrast=0.3),
                 
-                # 3. Xoay nhẹ (Rotation) - Chỉ xoay tối đa 2 độ để tránh mất nét
-                T.RandomRotation(degrees=2, fill=0),
+                # # 3. Xoay nhẹ (Rotation) - Chỉ xoay tối đa 2 độ để tránh mất nét
+                # T.RandomRotation(degrees=2, fill=0),
                 
-                # 4. Dịch chuyển nhẹ (Affine)
-                T.RandomAffine(degrees=0, translate=(0.02, 0.02), fill=0)
+                # # 4. Dịch chuyển nhẹ (Affine)
+                # T.RandomAffine(degrees=0, translate=(0.02, 0.02), fill=0)
             ])
         else:
             self.aug = None
