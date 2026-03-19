@@ -7,6 +7,6 @@ lr: 0.0002
 min_lr: 0.00001     
 weight_decay: 0.0001  
 warmup_epochs: 5    
-weight_pixel: 50.0
+weight_pixel: 100.0
 
 model_name: "pix2pix"  
