@@ -57,7 +57,8 @@ logs/
 # Submission
 submission_output/
 *.zip
-
+inference_visuals/
+test_results/
 # OS
 Thumbs.db
 .DS_Store

@@ -6,7 +6,7 @@ from tqdm import tqdm
 import cv2
 import pandas as pd
 
-from models.multiheadv2 import UNetMultiHeadV2
+from models.multiheadv3 import UNetGenerator
 from util.data_loader import create_test_dataloader
 
 
@@ -15,7 +15,7 @@ def load_model(checkpoint_path, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint không tìm thấy: {checkpoint_path}")
 
-    model = UNetMultiHeadV2().to(device)
+    model = UNetGenerator().to(device)
 
     print(f"Loading model from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -43,8 +43,8 @@ def run_inference(model, test_loader, device, threshold=0.5, visual_dir=None):
 
         # FIX 1: Nhận 2 đầu ra vì model là MultiHead
         # Nếu model cũ chỉ trả về 1 thì để: outputs = model(contexts)
-        pred_pixel, pred_cls = model(contexts) 
-
+        # pred_pixel, pred_cls = model(contexts) 
+        pred_pixel = model(contexts)  # Chỉ lấy đầu ra pixel, bỏ qua phân loại
         # FIX 2: Thêm Sigmoid để đưa về [0, 1] trước khi threshold
         outputs = torch.sigmoid(pred_pixel) 
 
@@ -128,8 +128,8 @@ def main():
     print(f"Using device: {device}")
 
     # Load best model
-    # checkpoint_path = os.path.join(train_cfg["save_dir"], "best.pt")
-    checkpoint_path = "best.pt"
+    checkpoint_path = os.path.join(train_cfg["save_dir"], "best_gan.pt")
+    # checkpoint_path = "best_gan.pt"
     model = load_model(checkpoint_path, device)
 
     # Create test dataloader
