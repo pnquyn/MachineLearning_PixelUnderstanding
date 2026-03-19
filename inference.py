@@ -134,14 +134,14 @@ def save_submission(pixels, output_dir="submission_output", test_csv_path="data/
             raise ValueError(f"File test CSV thiếu cột 'id': {test_csv_path}")
         sub_df = pd.DataFrame({
             'id': test_df['id'].astype(np.int64),
-            'target': [''] * len(test_df)
+            'target': test_df['id'].astype(np.int64)
         })
     else:
         # Fallback nếu không tìm thấy test CSV
         unique_ids = sorted(set(p[0] for p in pixels)) if pixels else []
         sub_df = pd.DataFrame({
             'id': np.array(unique_ids, dtype=np.int64),
-            'target': [''] * len(unique_ids)
+            'target': np.array(unique_ids, dtype=np.int64)
         })
 
     sub_df.to_csv(os.path.join(output_dir, "submission.csv"), index=False)
