@@ -8,104 +8,159 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from tqdm import tqdm
 
 from util.data_loader import create_dataloaders 
-# Đổi tên import sang model mới của chúng ta
-from models.multiheadv2 import UNetMultiHeadV2
+# Import 2 mạng riêng biệt từ model.py mới của bạn
+from models.multiheadv3 import UNetGenerator, PatchGANDiscriminator 
 from util.loss import DiceLoss
 
 # ==========================================
-# 2. VÒNG LẶP HUẤN LUYỆN
+# 2. VÒNG LẶP HUẤN LUYỆN GAN
 # ==========================================
-def train_one_epoch(model, loader, optimizer, criterions, device, loss_weights):
-    model.train()
-    total_loss = 0.0
-    total_pixel_acc = 0.0  
-    total_samples = 0
+def train_one_epoch(generator, discriminator, loader, opt_G, opt_D, criterions, device, lambda_pixel):
+    generator.train()
+    discriminator.train()
+    
+    total_g_loss = 0.0
+    total_d_loss = 0.0
+    
+    # Biến tính Global Dice Score
+    total_intersection = 0.0
+    total_pred = 0.0
+    total_target = 0.0
 
     pbar = tqdm(loader, desc="Training")
     
+    # Lưu ý: target_label (nhãn phân loại cũ) giờ không dùng tới nữa, 
+    # nhưng ta vẫn unpack ra để không bị lỗi DataLoader
     for context, target_img, target_label, _ in pbar:
         context = context.to(device)
-        target_img = target_img.to(device)
-        target_label = target_label.to(device).long() 
+        target_img = target_img.to(device).float()
+        
+        # Đảm bảo target_img có shape [B, 1, H, W]
+        if target_img.dim() == 3:
+            target_img = target_img.unsqueeze(1)
 
-        optimizer.zero_grad()
+        # ----------------------------------
+        # PHA 1: HUẤN LUYỆN DISCRIMINATOR (D)
+        # Mục tiêu: Nhận biết rạch ròi Thật (1) và Giả (0)
+        # ----------------------------------
+        opt_D.zero_grad()
         
-        # Forward pass: Lưu ý, lúc này pred_cls được sinh ra từ việc 
-        # model tự động nối context và ảnh sinh ra (pred_pixel) ở bên trong!
-        pred_pixel, pred_cls = model(context)
+        # Sinh ra Mask giả (Dùng detach() để không lan truyền gradient về G lúc này)
+        fake_mask_logits = generator(context)
+        fake_mask = torch.sigmoid(fake_mask_logits) # Mask giả [0, 1]
         
-        # Tính Loss
-        loss_pixel = criterions['pixel'](pred_pixel, target_img)
-        loss_cls = criterions['cls'](pred_cls, target_label)
+        # D chấm điểm đồ thật
+        pred_real = discriminator(context, target_img)
+        # loss_D_real = criterions['gan'](pred_real, torch.ones_like(pred_real))
+        loss_D_real = criterions['gan'](pred_real, torch.ones_like(pred_real) * 0.9)
+        # D chấm điểm đồ giả
+        pred_fake = discriminator(context, fake_mask.detach())
+        loss_D_fake = criterions['gan'](pred_fake, torch.zeros_like(pred_fake))
         
-        # TỔNG LOSS: Đây chính là nơi mô hình bị "ép". 
-        # Để loss_cls giảm, pred_pixel phải tạo ra hình thù giống chữ để lừa được Head 2.
-        loss = loss_weights['pixel'] * loss_pixel + loss_weights['cls'] * loss_cls
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
+        # Tổng Loss D (Trung bình của thật và giả)
+        loss_D = (loss_D_real + loss_D_fake) * 0.5
+        loss_D.backward()
+        opt_D.step()
 
-        # Tính Dice Score (Độ chính xác của riêng phần chữ)
+        # ----------------------------------
+        # PHA 2: HUẤN LUYỆN GENERATOR (G)
+        # Mục tiêu: Lừa D cho điểm 1 & Vẽ khớp từng pixel với target_img
+        # ----------------------------------
+        opt_G.zero_grad()
+        
+        # D chấm điểm lại đồ giả (Lần này KHÔNG detach để truyền gradient về G)
+        pred_fake_for_G = discriminator(context, fake_mask)
+        
+        # G muốn lừa D rằng đây là đồ thật (Target = 1)
+        # loss_G_GAN = criterions['gan'](pred_fake_for_G, torch.ones_like(pred_fake_for_G))
+        loss_G_GAN = criterions['gan'](pred_fake_for_G, torch.ones_like(pred_fake_for_G) * 0.9)
+        # G phải vẽ giống ảnh thật (Tính Dice Loss trên logits)
+        loss_G_pixel = criterions['pixel'](fake_mask_logits, target_img)
+        
+        # Tổng Loss G = Loss đánh lừa + Trọng số * Loss vẽ giống
+        loss_G = loss_G_GAN + lambda_pixel * loss_G_pixel
+        loss_G.backward()
+        opt_G.step()
+
+        # ----------------------------------
+        # TÍNH TOÁN CHỈ SỐ
+        # ----------------------------------
         with torch.no_grad():
-            pred_binary = (torch.sigmoid(pred_pixel) > 0.5).float()
+            pred_binary = (fake_mask > 0.5).float()
             target_binary = (target_img > 0.5).float()
             
             intersection = (pred_binary * target_binary).sum().item()
-            dice_score = (2. * intersection + 1e-6) / (pred_binary.sum().item() + target_binary.sum().item() + 1e-6)
+            pred_sum = pred_binary.sum().item()
+            target_sum = target_binary.sum().item()
+            
+            total_intersection += intersection
+            total_pred += pred_sum
+            total_target += target_sum
+            
+            batch_dice = (2. * intersection + 1e-6) / (pred_sum + target_sum + 1e-6)
 
-        total_loss += loss.item()
-        total_pixel_acc += dice_score  
-        total_samples += 1
+        total_g_loss += loss_G.item()
+        total_d_loss += loss_D.item()
 
         pbar.set_postfix(
-            loss=f"{loss.item():.4f}", 
-            pixel_dice=f"{dice_score:.4f}"
+            D_loss=f"{loss_D.item():.4f}", 
+            G_loss=f"{loss_G.item():.4f}",
+            px_loss=f"{loss_G_pixel.item():.4f}",
+            b_dice=f"{batch_dice:.4f}"
         )
 
-    return total_loss / len(loader), total_pixel_acc / total_samples
+    epoch_dice = (2. * total_intersection + 1e-6) / (total_pred + total_target + 1e-6)
+    return total_g_loss / len(loader), total_d_loss / len(loader), epoch_dice
 
 # ==========================================
-# 3. VÒNG LẶP VALIDATION
+# 3. VÒNG LẶP VALIDATION (Chỉ đánh giá Generator)
 # ==========================================
 @torch.no_grad()
-def validate(model, loader, criterions, device, loss_weights):
-    model.eval()
+def validate(generator, loader, criterions, device, lambda_pixel):
+    generator.eval()
     total_loss = 0.0
-    total_dice = 0.0
-    total_samples = 0
+    
+    total_intersection = 0.0
+    total_pred = 0.0
+    total_target = 0.0
 
     pbar = tqdm(loader, desc="Validating")
     
-    for context, target_img, target_label, _ in pbar:
+    for context, target_img, _, _ in pbar:
         context = context.to(device)
-        target_img = target_img.to(device)
-        target_label = target_label.to(device).long()
+        target_img = target_img.to(device).float()
+        if target_img.dim() == 3:
+            target_img = target_img.unsqueeze(1)
         
-        pred_pixel, pred_cls = model(context)
+        fake_mask_logits = generator(context)
         
-        loss_pixel = criterions['pixel'](pred_pixel, target_img)
-        loss_cls = criterions['cls'](pred_cls, target_label)
-        loss = loss_weights['pixel'] * loss_pixel + loss_weights['cls'] * loss_cls
+        # Ở bước val, chúng ta chỉ quan tâm nó vẽ chuẩn pixel đến đâu
+        loss_pixel = criterions['pixel'](fake_mask_logits, target_img)
+        # Giả lập loss tổng của G để dễ theo dõi
+        loss = lambda_pixel * loss_pixel 
         total_loss += loss.item()
 
-        pred_probs = torch.sigmoid(pred_pixel)
-        pred_binary = (pred_probs > 0.5).float()
+        fake_mask = torch.sigmoid(fake_mask_logits)
+        pred_binary = (fake_mask > 0.5).float()
         target_binary = (target_img > 0.5).float()
         
         intersection = (pred_binary * target_binary).sum().item()
-        denominator = pred_binary.sum().item() + target_binary.sum().item()
-        dice = (2. * intersection + 1e-6) / (denominator + 1e-6)
+        pred_sum = pred_binary.sum().item()
+        target_sum = target_binary.sum().item()
         
-        total_dice += dice
-        total_samples += 1
+        total_intersection += intersection
+        total_pred += pred_sum
+        total_target += target_sum
+        
+        batch_dice = (2. * intersection + 1e-6) / (pred_sum + target_sum + 1e-6)
 
         pbar.set_postfix(
             val_loss=f"{loss.item():.4f}", 
-            val_pixel_dice=f"{dice:.4f}"
+            b_dice=f"{batch_dice:.4f}"
         )
 
-    return total_loss / len(loader), total_dice / total_samples
+    epoch_dice = (2. * total_intersection + 1e-6) / (total_pred + total_target + 1e-6)
+    return total_loss / len(loader), epoch_dice
 
 # ==========================================
 # 4. HÀM MAIN THỰC THI
@@ -127,89 +182,100 @@ def main():
         font_path=data_cfg.get("font_path", None)
     )
 
-    # Sử dụng Model Mới
-    model = UNetMultiHeadV2().to(device) 
+    # Khởi tạo 2 mạng
+    generator = UNetGenerator(input_channels=1, output_channels=1).to(device)
+    discriminator = PatchGANDiscriminator(input_channels=1, mask_channels=1).to(device)
 
     criterions = {
-        'pixel': DiceLoss(),          
-        'cls': nn.CrossEntropyLoss()   
+        'pixel': DiceLoss(), 
+        'gan': nn.BCEWithLogitsLoss() # Loss dùng để đánh giá Thật/Giả cho PatchGAN
     }
     
-    loss_weights = {
-        'pixel': float(train_cfg.get("weight_pixel", 1.0)),
-        'cls': float(train_cfg.get("weight_cls", 0.5)) # Trọng số ép buộc (có thể tăng lên 1.0 nếu model lười sinh chữ)
-    }
+    # Trọng số Pixel Loss. Thường trong Pix2Pix, Pixel Loss phải LỚN HƠN RẤT NHIỀU so với GAN loss.
+    # Đề xuất: Đặt weight_pixel trong train.yaml khoảng 10.0 đến 100.0
+    lambda_pixel = float(train_cfg.get("weight_pixel", 10.0))
 
     save_dir = train_cfg["save_dir"]
     os.makedirs(save_dir, exist_ok=True)
-    last_checkpoint = os.path.join(save_dir, "last.pt")
-    best_checkpoint = os.path.join(save_dir, "best.pt")
+    last_checkpoint = os.path.join(save_dir, "last_gan.pt")
+    best_checkpoint = os.path.join(save_dir, "best_gan.pt")
 
-    optimizer = optim.AdamW(
-        model.parameters(), 
-        lr=float(train_cfg["lr"]), 
-        weight_decay=float(train_cfg.get("weight_decay", 1e-4)) 
-    )
+    # 2 Optimizer riêng biệt
+    lr = float(train_cfg["lr"])
+    opt_G = optim.AdamW(generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-4)
+    opt_D = optim.AdamW(discriminator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-4)
 
     epochs = train_cfg["epochs"]
     warmup_epochs = train_cfg.get("warmup_epochs", 5)
     min_lr = float(train_cfg.get("min_lr", 1e-6)) 
     
-    warmup_sch = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-    cosine_sch = CosineAnnealingLR(optimizer, T_max=epochs - warmup_epochs, eta_min=min_lr)
-    scheduler = SequentialLR(optimizer, schedulers=[warmup_sch, cosine_sch], milestones=[warmup_epochs])
+    # 2 Scheduler riêng biệt
+    warmup_G = LinearLR(opt_G, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    cosine_G = CosineAnnealingLR(opt_G, T_max=epochs - warmup_epochs, eta_min=min_lr)
+    sch_G = SequentialLR(opt_G, schedulers=[warmup_G, cosine_G], milestones=[warmup_epochs])
+
+    warmup_D = LinearLR(opt_D, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    cosine_D = CosineAnnealingLR(opt_D, T_max=epochs - warmup_epochs, eta_min=min_lr)
+    sch_D = SequentialLR(opt_D, schedulers=[warmup_D, cosine_D], milestones=[warmup_epochs])
 
     start_epoch = 0
     best_dice = 0.0
 
-    # Đã sửa lỗi logic khi khôi phục checkpoint (sử dụng best_dice thay vì best_loss)
+    # Khôi phục checkpoint cho cả 2 mạng
     if os.path.exists(last_checkpoint):
-        print(f"--- Đang khôi phục quá trình huấn luyện từ: {last_checkpoint} ---")
+        print(f"--- Đang khôi phục huấn luyện GAN từ: {last_checkpoint} ---")
         checkpoint = torch.load(last_checkpoint, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        generator.load_state_dict(checkpoint['gen_state_dict'])
+        discriminator.load_state_dict(checkpoint['disc_state_dict'])
+        opt_G.load_state_dict(checkpoint['opt_G_state_dict'])
+        opt_D.load_state_dict(checkpoint['opt_D_state_dict'])
+        sch_G.load_state_dict(checkpoint['sch_G_state_dict'])
+        sch_D.load_state_dict(checkpoint['sch_D_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         best_dice = checkpoint.get('best_dice', 0.0)
         print(f"--- Tiếp tục từ epoch {start_epoch} ---")
 
-    experiment_name = train_cfg.get('experiment_name', 'Kaggle_Pixel_Understanding')
+    experiment_name = train_cfg.get('experiment_name', 'Pix2Pix_Pixel_Understanding')
     print(f"\n=== Bắt đầu Experiment: {experiment_name} ===") 
+    print(f"Sử dụng lambda_pixel (Trọng số Dice so với GAN): {lambda_pixel}")
 
     for epoch in range(start_epoch, epochs):
         print(f"\n[Epoch {epoch+1}/{epochs}]")
         
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterions, device, loss_weights
+        train_g_loss, train_d_loss, train_dice = train_one_epoch(
+            generator, discriminator, train_loader, opt_G, opt_D, criterions, device, lambda_pixel
         )
-        val_loss, val_acc = validate(
-            model, val_loader, criterions, device, loss_weights
+        val_loss, val_dice = validate(
+            generator, val_loader, criterions, device, lambda_pixel
         )
         
-        scheduler.step()
+        sch_G.step()
+        sch_D.step()
 
-        curr_lr = optimizer.param_groups[0]["lr"]
-        print(f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | LR: {curr_lr:.6f}")
-        print(f"Train Pixel Dice: {train_acc:.4f} | Val Pixel Dice: {val_acc:.4f}")
+        curr_lr = opt_G.param_groups[0]["lr"]
+        print(f"D_Loss: {train_d_loss:.4f} | G_Loss: {train_g_loss:.4f} | Val G_Loss: {val_loss:.4f} | LR: {curr_lr:.6f}")
+        print(f"Train Global Dice: {train_dice:.4f} | Val Global Dice: {val_dice:.4f}")
         
         checkpoint_data = {
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
+            'gen_state_dict': generator.state_dict(),
+            'disc_state_dict': discriminator.state_dict(),
+            'opt_G_state_dict': opt_G.state_dict(),
+            'opt_D_state_dict': opt_D.state_dict(),
+            'sch_G_state_dict': sch_G.state_dict(),
+            'sch_D_state_dict': sch_D.state_dict(),
             'best_dice': best_dice,
-            'val_acc': val_acc,
         }
         torch.save(checkpoint_data, last_checkpoint)
 
-        # Lưu model tốt nhất dựa trên Dice Score (càng cao càng tốt)
-        if val_acc > best_dice:
-            best_dice = val_acc
-            print(f"Đã tìm thấy Best Model mới với Dice Score: {best_dice:.4f}! Lưu tại {best_checkpoint}")
-            torch.save(model.state_dict(), best_checkpoint)
+        if val_dice > best_dice:
+            best_dice = val_dice
+            print(f"🔥 Best Model mới với Global Dice: {best_dice:.4f}! Lưu tại {best_checkpoint}")
+            # Khi nộp bài (inference), ta chỉ cần Generator thôi nên chỉ lưu Gen weights
+            torch.save(generator.state_dict(), best_checkpoint)
 
-    final_path = os.path.join(save_dir, "final.pt")
-    torch.save(model.state_dict(), final_path)
+    final_path = os.path.join(save_dir, "final_gan_generator.pt")
+    torch.save(generator.state_dict(), final_path)
     print(f"=== Hoàn tất huấn luyện {experiment_name}! ===")
 
 if __name__ == "__main__":

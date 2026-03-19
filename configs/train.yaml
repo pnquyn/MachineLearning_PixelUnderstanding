@@ -1,11 +1,12 @@
 project_name: "PixelUnderstanding"
-experiment_name: "multihead_v2"
-save_dir: "checkpoints/multihead"
+experiment_name: "pix2pix"
+save_dir: "checkpoints/pix2pix3"
 
 epochs: 60          
 lr: 0.0002        
 min_lr: 0.00001     
-weight_decay: 0.01  
+weight_decay: 0.0001  
 warmup_epochs: 5    
+weight_pixel: 100.0
 
-model_name: "multiheadv2"  
+model_name: "pix2pix"  
